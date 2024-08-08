@@ -117,31 +117,64 @@ app.get("/api/rankings", async (req, res) => {
 
   const examData = await Exam.find({ status: "Passed" });
 
-  // Calculate a composite score for each exam
+  // Calculate a composite score and percentage for each exam
   const rankedData = examData.map((data) => ({
     ...data.toObject(),
-    compositeScore: data.score + (courseLevelScores[data.courseType] || 0) * 10,
+    compositeScore: data.score,
+    courseLevel: courseLevelScores[data.courseType] || 0,
+    percentage: (data.score / data.totalScore) * 100,
   }));
 
-  // Sort by composite score
-  rankedData.sort((a, b) => b.compositeScore - a.compositeScore);
-
-  // Assign ranks
-  let currentRank = 1;
-  let previousScore = null;
-  const rankings = rankedData.map((data, index) => {
-    if (data.compositeScore !== previousScore) {
-      currentRank = index + 1;
+  // Sort by composite score, course level, percentage, and name
+  rankedData.sort((a, b) => {
+    if (b.compositeScore !== a.compositeScore) {
+      return b.compositeScore - a.compositeScore; // Higher score first
     }
-    previousScore = data.compositeScore;
-    return {
-      ...data,
-      rank: currentRank,
-    };
+    if (b.courseLevel !== a.courseLevel) {
+      return b.courseLevel - a.courseLevel; // Higher course level first
+    }
+    if (b.percentage !== a.percentage) {
+      return b.percentage - a.percentage; // Higher percentage first
+    }
+    return a.name.localeCompare(b.name); // Alphabetical order
   });
 
-  res.json(rankings.slice(0, 30));
+  // Assign ranks with no ties
+  const rankedList = rankedData.map((data, index) => ({
+    ...data,
+    rank: index + 1,
+  }));
+
+  res.json(rankedList.slice(0, 30));
 });
+
+
+const excelDateToJSDate = (serial) => {
+  if (serial === null || serial === undefined) return null;
+  const utcDays = serial - 25569; // Excel's start date is 1900-01-01 (serial 1)
+  const utcDate = utcDays * 86400; // Convert days to seconds
+  return new Date(utcDate * 1000); // Convert seconds to milliseconds
+};
+
+function parseExcel(filePath) {
+  const workbook = xlsx.readFile(filePath);
+  const sheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  const jsonData = xlsx.utils.sheet_to_json(worksheet);
+
+  // Convert Excel date serial numbers to JavaScript Date objects
+  return jsonData.map(row => {
+    Object.keys(row).forEach(key => {
+      if (typeof row[key] === 'number' && key.toLowerCase().includes('date')) {
+        row[key] = excelDateToJSDate(row[key]);
+      } else if (typeof row[key] === 'string' && key.toLowerCase().includes('date')) {
+        // Handle date strings if needed
+        row[key] = new Date(row[key]);
+      }
+    });
+    return row;
+  });
+}
 
 // Bulk upload endpoint
 app.post("/api/bulkupload", upload.single("file"), async (req, res) => {
@@ -174,6 +207,14 @@ app.post("/api/bulkupload", upload.single("file"), async (req, res) => {
   }
 });
 
+
+// Utility function to convert date format from yyyy-mm-dd to dd-mm-yyyy
+const convertDateFormat = (dateStr) => {
+  const [year, month, day] = dateStr.split('-');
+  return `${day}-${month}-${year}`;
+};
+
+
 function parseCSV(filePath) {
   return new Promise((resolve, reject) => {
     const results = [];
@@ -185,12 +226,6 @@ function parseCSV(filePath) {
   });
 }
 
-function parseExcel(filePath) {
-  const workbook = xlsx.readFile(filePath);
-  const sheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
-  return xlsx.utils.sheet_to_json(worksheet);
-}
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
